@@ -1,117 +1,128 @@
 import {
-  getAllSubjeks,
-  getSubjekById,
-  createSubjek,
-  updateSubjek,
-  deleteSubjek,
-} from "../models/subjekModel.js";
-import { generateSubjekId } from "../utils/idGenerator.js";
+  getAllSubjects,
+  getSubjectById,
+  getSubjectByName,
+  createSubject,
+  updateSubject,
+  deleteSubject
+} from '../models/subjekModel.js';
 
-export const getSubjeks = async (req, res) => {
+export const getSubjects = async (req, res) => {
   try {
-    const subjeks = await getAllSubjeks();
+    const { search = '' } = req.query;
+    const data = await getAllSubjects(search);
 
     res.json({
-      message: "Data subjek berhasil diambil",
-      data: subjeks,
+      message: 'Data subjek berhasil diambil',
+      data: data
     });
   } catch (error) {
-    console.error("Get subjeks error:", error);
-    res.status(500).json({ message: "Terjadi kesalahan server" });
+    console.error('Get subjects error:', error);
+    res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
 };
 
-export const getSubjek = async (req, res) => {
+export const getSubject = async (req, res) => {
   try {
     const { id } = req.params;
-    const subjek = await getSubjekById(id);
+    const data = await getSubjectById(id);
 
-    if (!subjek) {
-      return res.status(404).json({ message: "Subjek tidak ditemukan" });
+    if (!data) {
+      return res.status(404).json({ message: 'Subjek tidak ditemukan' });
     }
 
     res.json({
-      message: "Data subjek berhasil diambil",
-      data: subjek,
+      message: 'Data subjek berhasil diambil',
+      data: data
     });
   } catch (error) {
-    console.error("Get subjek error:", error);
-    res.status(500).json({ message: "Terjadi kesalahan server" });
+    console.error('Get subject error:', error);
+    res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
 };
 
-export const addSubjek = async (req, res) => {
+export const addSubject = async (req, res) => {
   try {
-    const { nama } = req.body;
+    const data = req.body;
+    const userId = req.user?.id || 'system';
 
-    if (!nama) {
-      return res.status(400).json({ message: "Nama subjek wajib diisi" });
+    if (!data.name) {
+      return res.status(400).json({ message: 'Nama subjek wajib diisi' });
     }
 
-    const id = await generateSubjekId();
+    const duplicate = await getSubjectByName(data.name);
+    if (duplicate) {
+      return res.status(409).json({ message: 'Nama subjek sudah digunakan' });
+    }
 
-    console.log("Generated Subjek ID:", id);
-
-    const newSubjek = await createSubjek({ id, nama });
+    const newData = await createSubject(data, userId);
 
     res.status(201).json({
-      message: "Subjek berhasil ditambahkan",
-      data: newSubjek,
+      message: 'Subjek berhasil ditambahkan',
+      data: newData
     });
   } catch (error) {
-    console.error("Add subjek error:", error);
-    res.status(500).json({ message: "Terjadi kesalahan server" });
+    console.error('Add subject error:', error);
+    res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
 };
 
-export const editSubjek = async (req, res) => {
+export const editSubject = async (req, res) => {
   try {
     const { id } = req.params;
-    const { nama } = req.body;
+    const data = req.body;
+    const userId = req.user?.id || 'system';
 
-    if (!nama) {
-      return res.status(400).json({ message: "Nama subjek wajib diisi" });
+    const existing = await getSubjectById(id);
+    if (!existing) {
+      return res.status(404).json({ message: 'Subjek tidak ditemukan' });
     }
 
-    const existingSubjek = await getSubjekById(id);
-    if (!existingSubjek) {
-      return res.status(404).json({ message: "Subjek tidak ditemukan" });
+    if (data.name && data.name !== existing.name) {
+      const duplicate = await getSubjectByName(data.name);
+      if (duplicate) {
+        return res.status(409).json({ message: 'Nama subjek sudah digunakan' });
+      }
     }
 
-    const updated = await updateSubjek(id, { nama });
+    const updated = await updateSubject(id, data, userId);
 
     if (!updated) {
-      return res.status(400).json({ message: "Gagal memperbarui subjek" });
+      return res.status(400).json({ message: 'Gagal memperbarui subjek' });
     }
 
     res.json({
-      message: "Subjek berhasil diperbarui",
-      data: { id, nama },
+      message: 'Subjek berhasil diperbarui',
+      data: await getSubjectById(id)
     });
   } catch (error) {
-    console.error("Edit subjek error:", error);
-    res.status(500).json({ message: "Terjadi kesalahan server" });
+    console.error('Edit subject error:', error);
+    res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
 };
 
-export const removeSubjek = async (req, res) => {
+export const removeSubject = async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.user?.id || 'system';
 
-    const existingSubjek = await getSubjekById(id);
-    if (!existingSubjek) {
-      return res.status(404).json({ message: "Subjek tidak ditemukan" });
+    const existing = await getSubjectById(id);
+    if (!existing) {
+      return res.status(404).json({ message: 'Subjek tidak ditemukan' });
     }
 
-    const deleted = await deleteSubjek(id);
+    const deleted = await deleteSubject(id, userId);
 
     if (!deleted) {
-      return res.status(400).json({ message: "Gagal menghapus subjek" });
+      return res.status(400).json({ message: 'Gagal menghapus subjek' });
     }
 
-    res.json({ message: "Subjek berhasil dihapus" });
+    res.json({ message: 'Subjek berhasil dihapus' });
   } catch (error) {
-    console.error("Remove subjek error:", error);
-    res.status(500).json({ message: "Terjadi kesalahan server" });
+    if (error.code === 'IN_USE') {
+      return res.status(409).json({ message: error.message });
+    }
+    console.error('Remove subject error:', error);
+    res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
 };

@@ -1,25 +1,33 @@
-import { 
-  getAllBooks, 
-  getBookById, 
-  createBook, 
-  updateBook, 
+import {
+  getAllBooks,
+  countBooks,
+  getBookById,
+  getBookByBibid,
+  createBook,
+  updateBook,
   deleteBook,
-  getBooksByCategory 
+  getBooksBySubject,
+  getBooksByAuthor
 } from '../models/bookModel.js';
 
 export const getBooks = async (req, res) => {
   try {
     const { page = 1, limit = 10, search = '' } = req.query;
     const offset = (page - 1) * limit;
-    
-    const books = await getAllBooks(parseInt(limit), offset, search);
-    
+
+    const [books, total] = await Promise.all([
+      getAllBooks(parseInt(limit), offset, search),
+      countBooks(search)
+    ]);
+
     res.json({
       message: 'Data buku berhasil diambil',
       data: books,
       pagination: {
         page: parseInt(page),
-        limit: parseInt(limit)
+        limit: parseInt(limit),
+        total: total,
+        total_page: Math.ceil(total / parseInt(limit))
       }
     });
   } catch (error) {
@@ -32,11 +40,11 @@ export const getBook = async (req, res) => {
   try {
     const { id } = req.params;
     const book = await getBookById(id);
-    
+
     if (!book) {
       return res.status(404).json({ message: 'Buku tidak ditemukan' });
     }
-    
+
     res.json({
       message: 'Data buku berhasil diambil',
       data: book
@@ -50,19 +58,28 @@ export const getBook = async (req, res) => {
 export const addBook = async (req, res) => {
   try {
     const bookData = req.body;
-    
-    // Validasi input dasar
-    if (!bookData.judul || !bookData.penerbit) {
-      return res.status(400).json({ message: 'Judul dan penerbit wajib diisi' });
+    const userId = req.user?.id || 'system';
+
+    if (!bookData.bibid || !bookData.title) {
+      return res.status(400).json({ message: 'BIBID dan judul (title) wajib diisi' });
     }
-    
-    const newBook = await createBook(bookData);
-    
+
+    const duplicate = await getBookByBibid(bookData.bibid);
+    if (duplicate) {
+      return res.status(409).json({ message: 'BIBID sudah digunakan oleh buku lain' });
+    }
+
+    const newBook = await createBook(bookData, userId);
+
     res.status(201).json({
       message: 'Buku berhasil ditambahkan',
       data: newBook
     });
   } catch (error) {
+    // Jaga-jaga kalau dua request masuk bersamaan dan lolos pengecekan di atas
+    if (error.code === 'P2002') {
+      return res.status(409).json({ message: 'BIBID sudah digunakan oleh buku lain' });
+    }
     console.error('Add book error:', error);
     res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
@@ -72,23 +89,34 @@ export const editBook = async (req, res) => {
   try {
     const { id } = req.params;
     const bookData = req.body;
-    
+    const userId = req.user?.id || 'system';
+
     const existingBook = await getBookById(id);
     if (!existingBook) {
       return res.status(404).json({ message: 'Buku tidak ditemukan' });
     }
-    
-    const updated = await updateBook(id, bookData);
-    
-    if (!updated) {
-      return res.status(400).json({ message: 'Gagal memperbarui buku' });
+
+    if (bookData.bibid && bookData.bibid !== existingBook.bibid) {
+      const duplicate = await getBookByBibid(bookData.bibid);
+      if (duplicate) {
+        return res.status(409).json({ message: 'BIBID sudah digunakan oleh buku lain' });
+      }
     }
-    
+
+    await updateBook(id, bookData, userId);
+
+    // Ambil ulang supaya yang dikembalikan data asli dari database,
+    // bukan pantulan dari req.body
+    const updatedBook = await getBookById(id);
+
     res.json({
       message: 'Buku berhasil diperbarui',
-      data: { id, ...bookData }
+      data: updatedBook
     });
   } catch (error) {
+    if (error.code === 'P2002') {
+      return res.status(409).json({ message: 'BIBID sudah digunakan oleh buku lain' });
+    }
     console.error('Edit book error:', error);
     res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
@@ -97,36 +125,55 @@ export const editBook = async (req, res) => {
 export const removeBook = async (req, res) => {
   try {
     const { id } = req.params;
-    
+    const userId = req.user?.id || 'system';
+
     const existingBook = await getBookById(id);
     if (!existingBook) {
       return res.status(404).json({ message: 'Buku tidak ditemukan' });
     }
-    
-    const deleted = await deleteBook(id);
-    
+
+    const deleted = await deleteBook(id, userId);
+
     if (!deleted) {
       return res.status(400).json({ message: 'Gagal menghapus buku' });
     }
-    
+
     res.json({ message: 'Buku berhasil dihapus' });
   } catch (error) {
+    if (error.code === 'HAS_ACTIVE_COPIES') {
+      return res.status(409).json({ message: error.message });
+    }
     console.error('Remove book error:', error);
     res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
 };
 
-export const getBooksByCategories = async (req, res) => {
+export const getBooksBySubjects = async (req, res) => {
   try {
-    const { categoryId } = req.params;
-    const books = await getBooksByCategory(categoryId);
-    
+    const { subjectId } = req.params;
+    const books = await getBooksBySubject(subjectId);
+
     res.json({
       message: 'Data buku berhasil diambil',
       data: books
     });
   } catch (error) {
-    console.error('Get books by category error:', error);
+    console.error('Get books by subject error:', error);
+    res.status(500).json({ message: 'Terjadi kesalahan server' });
+  }
+};
+
+export const getBooksByAuthors = async (req, res) => {
+  try {
+    const { authorId } = req.params;
+    const books = await getBooksByAuthor(authorId);
+
+    res.json({
+      message: 'Data buku berhasil diambil',
+      data: books
+    });
+  } catch (error) {
+    console.error('Get books by author error:', error);
     res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
 };
