@@ -1,64 +1,102 @@
-import db from '../config/database.js';
+import prisma from '../config/prisma.js';
+import { v4 as uuidv4 } from "uuid";
 
-export const getAllSubjeks = async () => {
-  const query = `
-    SELECT * FROM subjek 
-    WHERE is_deleted = 0
-    ORDER BY id ASC
-  `;
-  
-  const [rows] = await db.execute(query);
-  return rows;
+export const getAllSubjects = async (search = "") => {
+  try {
+    return await prisma.subjects.findMany({
+      where: {
+        ...(search && {
+          name: { contains: search },
+        }),
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+  } catch (error) {
+    console.error("Error getting all subjects:", error);
+    throw error;
+  }
 };
 
-export const getSubjekById = async (id) => {
-  const query = `
-    SELECT * FROM subjek 
-    WHERE id = ? AND is_deleted = 0
-  `;
-  
-  const [rows] = await db.execute(query, [id]);
-  return rows[0];
+export const getSubjectById = async (id) => {
+  try {
+    return await prisma.subjects.findFirst({
+      where: {
+        id: id,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting subject by id:", error);
+    throw error;
+  }
 };
 
-export const createSubjek = async (subjekData) => {
-  const { id, nama } = subjekData;
-
-  const query = `
-    INSERT INTO subjek (id, nama, created_at, created_by)
-    VALUES (?, ?, NOW(), ?)
-  `;
-
-  await db.execute(query, [id, nama, 'system']);
-
-  return { id, nama };
+export const getSubjectByName = async (name) => {
+  try {
+    return await prisma.subjects.findFirst({
+      where: {
+        name: name,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting subject by name:", error);
+    throw error;
+  }
 };
 
-export const updateSubjek = async (id, subjekData) => {
-  const { nama } = subjekData;
+export const createSubject = async (data, userId) => {
+  const { name } = data;
 
-  const query = `
-    UPDATE subjek 
-    SET nama = ?, 
-        updated_at = NOW(), 
-        updated_by = ?
-    WHERE id = ? AND is_deleted = 0
-  `;
+  const id = uuidv4();
 
-  const [result] = await db.execute(query, [nama, 'system', id]);
-  return result.affectedRows > 0;
+  try {
+    return await prisma.subjects.create({
+      data: {
+        id: id,
+        name: name,
+        created_by: userId,
+        updated_by: userId,
+      },
+    });
+  } catch (error) {
+    console.error("Error creating subject:", error);
+    throw error;
+  }
 };
 
-export const deleteSubjek = async (id) => {
-  // Soft delete
-  const query = `
-    UPDATE subjek 
-    SET is_deleted = 1, 
-        updated_at = NOW(), 
-        updated_by = ? 
-    WHERE id = ?
-  `;
+export const updateSubject = async (id, data, userId) => {
+  const { name } = data;
 
-  const [result] = await db.execute(query, ['system', id]);
-  return result.affectedRows > 0;
+  try {
+    const result = await prisma.subjects.updateMany({
+      where: {
+        id: id,
+      },
+      data: {
+        ...(name !== undefined && { name: name }),
+        updated_by: userId,
+      },
+    });
+
+    return result.count > 0;
+  } catch (error) {
+    console.error("Error updating subject:", error);
+    throw error;
+  }
+};
+
+export const deleteSubject = async (id, userId) => {
+  try {
+    // Hard delete. Kaitan di tabel pivot ikut terhapus lewat
+    // onDelete: Cascade yang diatur di schema.
+    const result = await prisma.subjects.deleteMany({
+      where: { id: id },
+    });
+
+    return result.count > 0;
+  } catch (error) {
+    console.error("Error deleting subject:", error);
+    throw error;
+  }
 };

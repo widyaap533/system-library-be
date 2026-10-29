@@ -1,99 +1,141 @@
-import pool from '../config/database.js';
+import prisma from '../config/prisma.js';
+import { v4 as uuidv4 } from "uuid";
 
-export const getAllCategories = async () => {
+// Akses bawaan ikut dibawa supaya form eksemplar bisa langsung
+// mengisi dropdown Akses begitu Kategori dipilih
+const categoryInclude = {
+  default_access_type: true,
+};
+
+export const getAllCategories = async (search = "") => {
   try {
-    const [rows] = await pool.execute(
-      'SELECT * FROM kategori WHERE is_deleted = 0 ORDER BY nama ASC'
-    );
-    return rows;
+    return await prisma.categories.findMany({
+      where: {
+        is_deleted: false,
+        ...(search && {
+          name: { contains: search },
+        }),
+      },
+      include: categoryInclude,
+      orderBy: {
+        name: 'asc',
+      },
+    });
   } catch (error) {
-    console.error('Error getting all categories:', error);
+    console.error("Error getting all categories:", error);
     throw error;
   }
 };
 
 export const getCategoryById = async (id) => {
   try {
-    const [rows] = await pool.execute(
-      'SELECT * FROM kategori WHERE id = ? AND is_deleted = 0',
-      [id]
-    );
-    return rows[0] || null;
+    return await prisma.categories.findFirst({
+      where: {
+        id: id,
+        is_deleted: false,
+      },
+      include: categoryInclude,
+    });
   } catch (error) {
-    console.error('Error getting category by id:', error);
+    console.error("Error getting category by id:", error);
     throw error;
   }
 };
 
-// Helper function untuk generate ID kategori
-const generateCategoryId = async () => {
+export const getCategoryByName = async (name) => {
   try {
-    // Ambil ID terakhir
-    const [rows] = await pool.execute(
-      "SELECT id FROM kategori WHERE id LIKE 'KT%' ORDER BY id DESC LIMIT 1"
-    );
-    
-    if (rows.length === 0) {
-      return 'KT01'; // ID pertama jika belum ada data
+    return await prisma.categories.findFirst({
+      where: {
+        name: name,
+        is_deleted: false,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting category by name:", error);
+    throw error;
+  }
+};
+
+export const createCategory = async (data, userId) => {
+  const { name, default_access_type_id } = data;
+
+  const id = uuidv4();
+
+  try {
+    return await prisma.categories.create({
+      data: {
+        id: id,
+        name: name,
+        default_access_type_id: default_access_type_id || null,
+        created_by: userId,
+        updated_by: userId,
+      },
+      include: categoryInclude,
+    });
+  } catch (error) {
+    console.error("Error creating category:", error);
+    throw error;
+  }
+};
+
+export const updateCategory = async (id, data, userId) => {
+  const { name, default_access_type_id } = data;
+
+  try {
+    const result = await prisma.categories.updateMany({
+      where: {
+        id: id,
+        is_deleted: false,
+      },
+      data: {
+        ...(name !== undefined && { name: name }),
+        // Kirim null secara sengaja untuk menghapus akses bawaan
+        ...(default_access_type_id !== undefined && {
+          default_access_type_id: default_access_type_id || null,
+        }),
+        updated_by: userId,
+      },
+    });
+
+    return result.count > 0;
+  } catch (error) {
+    console.error("Error updating category:", error);
+    throw error;
+  }
+};
+
+export const deleteCategory = async (id, userId) => {
+  try {
+    // Kategori melekat pada eksemplar, bukan pada judul buku.
+    // book_copies sudah hard delete, jadi tidak ada filter is_deleted di sini.
+    const usedByCopies = await prisma.book_copies.count({
+      where: { category_id: id },
+    });
+
+    if (usedByCopies > 0) {
+      const error = new Error(
+        `Kategori masih dipakai oleh ${usedByCopies} eksemplar. Tidak dapat dihapus.`
+      );
+      error.code = "IN_USE";
+      throw error;
     }
-    
-    // Extract nomor dari ID terakhir (misal: KT04 -> 4)
-    const lastId = rows[0].id;
-    const lastNumber = parseInt(lastId.substring(2));
-    const newNumber = lastNumber + 1;
-    
-    // Format dengan leading zero (KT05, KT06, dst)
-    return `KT${newNumber.toString().padStart(2, '0')}`;
-  } catch (error) {
-    console.error('Error generating category ID:', error);
-    throw error;
-  }
-};
 
-export const createCategory = async (categoryData) => {
-  const { nama } = categoryData;
-  
-  try {
-    // Generate ID otomatis
-    const newId = await generateCategoryId();
-    
-    await pool.execute(
-      'INSERT INTO kategori (id, nama, created_at, created_by) VALUES (?, ?, NOW(), ?)',
-      [newId, nama, 'system']
-    );
-    
-    return { id: newId, nama };
-  } catch (error) {
-    console.error('Error creating category:', error);
-    throw error;
-  }
-};
+    // Soft delete: barisnya tetap ada supaya data lama yang menunjuk
+    // ke sini tidak rusak, tapi tidak lagi muncul di dropdown.
+    const result = await prisma.categories.updateMany({
+      where: {
+        id: id,
+        is_deleted: false,
+      },
+      data: {
+        is_deleted: true,
+        updated_by: userId,
+      },
+    });
 
-export const updateCategory = async (id, categoryData) => {
-  const { nama } = categoryData;
-  
-  try {
-    const [result] = await pool.execute(
-      'UPDATE kategori SET nama = ?, updated_at = NOW(), updated_by = ? WHERE id = ? AND is_deleted = 0',
-      [nama, 'system', id]
-    );
-    
-    return result.affectedRows > 0;
+    return result.count > 0;
   } catch (error) {
-    console.error('Error updating category:', error);
-    throw error;
-  }
-};
-
-export const deleteCategory = async (id) => {
-  try {
-    const [result] = await pool.execute(
-      'UPDATE kategori SET is_deleted = 1, updated_at = NOW() WHERE id = ?',
-      [id]
-    );
-    return result.affectedRows > 0;
-  } catch (error) {
-    console.error('Error deleting category:', error);
+    console.error("Error deleting category:", error);
     throw error;
   }
 };

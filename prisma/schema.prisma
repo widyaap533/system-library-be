@@ -1,0 +1,458 @@
+// =============================================================
+// SKEMA PERPUSTAKAAN — REVISI
+// Perubahan pokok dari versi lama:
+//  1. Atribut fisik/lokasi dipindah dari `books` ke `book_copies`
+//  2. `categories` sekarang terhubung ke eksemplar, bukan ke judul
+//  3. `statuses` dipecah jadi `copy_statuses` dan `loan_statuses`
+//  4. Ditambah `authors` + pivot (sebelumnya pengarang tidak ada sama sekali)
+//  5. Subjek jadi many-to-many
+//  6. Lokasi dipecah jadi `libraries` > `rooms`
+//  7. Akses berdiri sendiri, dengan default per kategori
+//  8. Penghapusan dibagi dua:
+//       - Data transaksi & katalog dihapus betulan (hard delete),
+//         dengan cascade ke baris yang memang milik induknya.
+//       - Tabel master tetap soft delete (is_deleted), supaya nilai
+//         dropdown yang pernah dipakai bisa dipensiunkan tanpa
+//         merusak baris lama yang menunjuk ke sana.
+// =============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================
+// KATALOG (per judul) — HARD DELETE
+// =============================================================
+
+model books {
+  id                String  @id @default(uuid()) @db.Char(36)
+  bibid             String  @unique @db.VarChar(30) // 0010-0925000013
+  title             String  @db.VarChar(500)
+  edition           String? @db.VarChar(255)
+  publication_place String? @db.VarChar(255) // Palu
+  publisher         String? @db.VarChar(255) // BAPPEDA-PM
+  publication_year  Int? // 2009
+
+  synopsis             String? @db.Text
+  physical_description String? @db.VarChar(255) // 85 hlm : Ilus ; 21,5 x 24,3 cm
+  call_number          String? @db.VarChar(100) // 915.44.31 RUS k
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  authors          book_authors[]
+  subjects         book_subjects[]
+  digital_contents digital_contents[]
+  book_copies      book_copies[]
+
+  @@index([title])
+  @@index([call_number])
+}
+
+model authors {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255) // H. Rusdy Mastura
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  books book_authors[]
+
+  @@index([name])
+}
+
+model book_authors {
+  book_id   String @db.Char(36)
+  author_id String @db.Char(36)
+  role      String @default("Pengarang") @db.VarChar(50) // Pengarang / Penerjemah / Editor
+  position  Int    @default(1) // urutan tampil
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  // Kaitan ini tidak punya arti tanpa buku atau pengarangnya,
+  // jadi ikut terhapus bersama induknya
+  book   books   @relation(fields: [book_id], references: [id], onDelete: Cascade)
+  author authors @relation(fields: [author_id], references: [id], onDelete: Cascade)
+
+  @@id([book_id, author_id, role])
+  @@index([author_id])
+}
+
+model subjects {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255) // Geografi Kota Palu
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  books book_subjects[]
+}
+
+model book_subjects {
+  book_id    String @db.Char(36)
+  subject_id String @db.Char(36)
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  book    books    @relation(fields: [book_id], references: [id], onDelete: Cascade)
+  subject subjects @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+
+  @@id([book_id, subject_id])
+  @@index([subject_id])
+}
+
+model digital_contents {
+  id      String  @id @default(uuid()) @db.Char(36)
+  book_id String  @db.Char(36)
+  title   String  @db.VarChar(255)
+  url     String  @db.VarChar(500)
+  mime    String? @db.VarChar(100)
+  size    Int? // byte
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  book books @relation(fields: [book_id], references: [id], onDelete: Cascade)
+
+  @@index([book_id])
+}
+
+// =============================================================
+// EKSEMPLAR (per kopi fisik) — HARD DELETE
+// =============================================================
+
+model book_copies {
+  id               String   @id @default(uuid()) @db.Char(36)
+  barcode          String   @unique @db.VarChar(30) // 5142
+  id_number        String   @unique @db.VarChar(30) // nomor induk: 5142
+  acquisition_date DateTime @db.Date // 2025-09-03
+  opac_active      Boolean  @default(true) // kolom OPAC: Aktif / Tidak
+  notes            String?  @db.Text
+
+  book_id            String @db.Char(36)
+  physical_format_id String @db.Char(36)
+  resource_type_id   String @db.Char(36)
+  category_id        String @db.Char(36)
+  access_type_id     String @db.Char(36)
+  copy_status_id     String @db.Char(36)
+  room_id            String @db.Char(36) // Lokasi Perpustakaan diambil dari room.library
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  // Hapus judul, semua eksemplarnya ikut
+  book books @relation(fields: [book_id], references: [id], onDelete: Cascade)
+
+  // Relasi ke master tanpa cascade: menghapus satu nilai dropdown
+  // tidak boleh menghapus ribuan eksemplar yang memakainya
+  physical_format physical_formats @relation(fields: [physical_format_id], references: [id])
+  resource_type   resource_types   @relation(fields: [resource_type_id], references: [id])
+  category        categories       @relation(fields: [category_id], references: [id])
+  access_type     access_types     @relation(fields: [access_type_id], references: [id])
+  copy_status     copy_statuses    @relation(fields: [copy_status_id], references: [id])
+  room            rooms            @relation(fields: [room_id], references: [id])
+
+  loans loans[]
+
+  @@index([book_id])
+  @@index([copy_status_id])
+  @@index([room_id])
+}
+
+// =============================================================
+// SIRKULASI — HARD DELETE
+// =============================================================
+
+model loans {
+  id          String    @id @default(uuid()) @db.Char(36)
+  borrow_date DateTime  @db.DateTime
+  due_date    DateTime  @db.DateTime
+  return_date DateTime? @db.DateTime
+  notes       String?   @db.Text
+
+  loan_status_id String @db.Char(36)
+  user_id        String @db.Char(36)
+  book_copy_id   String @db.Char(36)
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  loan_status loan_statuses @relation(fields: [loan_status_id], references: [id])
+
+  // Hapus anggota atau eksemplar, riwayat peminjamannya ikut
+  user      users       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  book_copy book_copies @relation(fields: [book_copy_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([book_copy_id])
+  @@index([loan_status_id])
+}
+
+// =============================================================
+// PENGGUNA — HARD DELETE
+// =============================================================
+
+model users {
+  id             String   @id @default(uuid()) @db.Char(36)
+  member_id      String   @unique @db.VarChar(20)
+  nik            String   @unique @db.VarChar(16)
+  name           String   @db.VarChar(255)
+  email          String   @unique @db.VarChar(100)
+  password       String   @db.VarChar(100)
+  place_of_birth String   @db.VarChar(255)
+  date_of_birth  DateTime @db.Date
+  address        String   @db.VarChar(255)
+  phone_number   String   @db.VarChar(20)
+  institution    String   @db.VarChar(100)
+  refresh_token  String?  @db.Text
+
+  role_id       String @db.Char(36)
+  occupation_id String @db.Char(36)
+  marriage_id   String @db.Char(36)
+  education_id  String @db.Char(36)
+  religion_id   String @db.Char(36)
+  gender_id     String @db.Char(36)
+
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  role       roles            @relation(fields: [role_id], references: [id])
+  occupation occupations      @relation(fields: [occupation_id], references: [id])
+  marriage   marital_statuses @relation(fields: [marriage_id], references: [id])
+  education  educations       @relation(fields: [education_id], references: [id])
+  religion   religions        @relation(fields: [religion_id], references: [id])
+  gender     genders          @relation(fields: [gender_id], references: [id])
+
+  loans loans[]
+
+  @@index([role_id])
+}
+
+// =============================================================
+// MASTER — SOFT DELETE (is_deleted tetap dipertahankan)
+// =============================================================
+
+model categories {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255) // Koleksi Umum / Koleksi Referensi / Koleksi Deposit
+
+  // Mengisi Akses secara otomatis di form, tapi tetap bisa diubah per eksemplar.
+  default_access_type_id String? @db.Char(36)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  default_access_type access_types? @relation("CategoryDefaultAccess", fields: [default_access_type_id], references: [id])
+
+  book_copies book_copies[]
+}
+
+model access_types {
+  id            String  @id @default(uuid()) @db.Char(36)
+  name          String  @db.VarChar(255) // Dapat dipinjam / Tidak dapat dipinjam
+  is_borrowable Boolean @default(true)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  book_copies            book_copies[]
+  default_for_categories categories[]  @relation("CategoryDefaultAccess")
+}
+
+model physical_formats {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255) // Buku / CD / Peta
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  book_copies book_copies[]
+}
+
+model resource_types {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255) // Pembelian / Hadiah-Hibah
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  book_copies book_copies[]
+}
+
+model copy_statuses {
+  id           String  @id @default(uuid()) @db.Char(36)
+  name         String  @db.VarChar(255)
+  code         String? @unique @db.VarChar(30) // TERSEDIA / DIPINJAM / RUSAK / HILANG
+  is_available Boolean @default(false)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  book_copies book_copies[]
+}
+
+model loan_statuses {
+  id        String  @id @default(uuid()) @db.Char(36)
+  name      String  @db.VarChar(255)
+  code      String? @unique @db.VarChar(30) // BERJALAN / DIKEMBALIKAN / TERLAMBAT
+  is_active Boolean @default(true)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  loans loans[]
+}
+
+model libraries {
+  id      String  @id @default(uuid()) @db.Char(36)
+  name    String  @db.VarChar(255) // Gedung Layanan Perpustakaan Kota Palu
+  address String? @db.VarChar(255)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  rooms rooms[]
+}
+
+model rooms {
+  id         String @id @default(uuid()) @db.Char(36)
+  name       String @db.VarChar(255) // Ruang Baca Umum / Ruang Koleksi Referensi
+  library_id String @db.Char(36)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  library     libraries     @relation(fields: [library_id], references: [id])
+  book_copies book_copies[]
+
+  @@index([library_id])
+}
+
+model roles {
+  id   String  @id @default(uuid()) @db.Char(36)
+  name String  @unique @db.VarChar(50) // Anggota / Pustakawan / Admin
+  code String? @unique @db.VarChar(30) // ADMIN / PUSTAKAWAN / ANGGOTA
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  users users[]
+}
+
+model genders {
+  id   String  @id @default(uuid()) @db.Char(36)
+  name String  @db.VarChar(255)
+  code String? @unique @db.VarChar(5) // L / P — huruf depan nomor anggota
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  users users[]
+}
+
+model religions {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  users users[]
+}
+
+model educations {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  users users[]
+}
+
+model occupations {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  users users[]
+}
+
+model marital_statuses {
+  id   String @id @default(uuid()) @db.Char(36)
+  name String @db.VarChar(255)
+
+  is_deleted Boolean  @default(false)
+  created_at DateTime @default(now())
+  created_by String   @db.Char(36)
+  updated_at DateTime @updatedAt
+  updated_by String   @db.Char(36)
+
+  users users[]
+}
