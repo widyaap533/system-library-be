@@ -16,7 +16,7 @@ router.get('/user', getUsers);
 router.get('/user/:id', getUser);
 
 // Protected routes
-router.post('/user', addUser);
+router.post('/user', addUser); // opsional tapi bisa dipakai admin buat tambah akun baru
 router.put('/user/:id', editUser);
 router.put('/user/:id/password', editPassword);
 router.delete('/user/:id', removeUser);

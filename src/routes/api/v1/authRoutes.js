@@ -11,7 +11,7 @@ import { authenticate } from '../../../middleware/auth.js';
 const router = express.Router();
 
 // Terbuka untuk umum
-router.post('/register', register);
+router.post('/register', register); // register buat anggota
 router.post('/login', login);
 router.post('/refresh', refresh);
 

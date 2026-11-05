@@ -1,12 +1,10 @@
 import passport from '../config/passport.js';
 
-/**
- * Mewajibkan token yang sah. Mengisi req.user kalau lolos.
- *
- * Dipakai custom callback, bukan passport.authenticate biasa,
- * supaya pesan errornya berbahasa Indonesia dan membedakan
- * token kedaluwarsa dari token tidak sah.
- */
+export const ROLE = {
+  ADMIN: 'ADMIN',
+  MEMBER: 'ANGGOTA',
+};
+
 export const authenticate = (req, res, next) => {
   passport.authenticate('jwt', { session: false }, (error, user, info) => {
     if (error) {
@@ -32,12 +30,6 @@ export const authenticate = (req, res, next) => {
   })(req, res, next);
 };
 
-/**
- * Membaca token kalau ada, tapi tidak mewajibkannya.
- *
- * Dipakai di endpoint publik yang tetap ingin mencatat siapa pelakunya
- * kalau kebetulan sudah login — misalnya pencarian katalog.
- */
 export const optionalAuth = (req, res, next) => {
   passport.authenticate('jwt', { session: false }, (error, user) => {
     if (user) req.user = user;
@@ -45,15 +37,6 @@ export const optionalAuth = (req, res, next) => {
   })(req, res, next);
 };
 
-/**
- * Membatasi akses berdasarkan kode peran.
- *
- * Dipakai setelah authenticate:
- *   router.delete('/book/:id', authenticate, requireRole('ADMIN'), removeBook);
- *
- * Yang dicocokkan kode, bukan nama, supaya pengubahan nama peran
- * di menu master tidak diam-diam membuka atau menutup akses.
- */
 export const requireRole = (...allowedCodes) => {
   return (req, res, next) => {
     if (!req.user) {
@@ -78,20 +61,13 @@ export const requireRole = (...allowedCodes) => {
   };
 };
 
-/**
- * Mengizinkan pengguna mengakses datanya sendiri, atau peran tertentu
- * mengakses data siapa saja.
- *
- * Supaya anggota bisa melihat profil dan riwayat pinjamnya sendiri,
- * tanpa bisa mengintip milik anggota lain.
- */
 export const requireSelfOrRole = (paramName, ...allowedCodes) => {
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ message: 'Tidak memiliki akses' });
     }
 
-    const isSelf = req.user.id === req.params[paramName];
+    const isSelf = String(req.user.id) === String(req.params[paramName]);
     const hasRole = allowedCodes.includes(req.user.role?.code);
 
     if (!isSelf && !hasRole) {
@@ -104,12 +80,5 @@ export const requireSelfOrRole = (paramName, ...allowedCodes) => {
   };
 };
 
-// Pintasan yang sering dipakai, supaya route file tidak penuh string
-export const ROLE = {
-  ADMIN: 'ADMIN',
-  LIBRARIAN: 'PUSTAKAWAN',
-  MEMBER: 'ANGGOTA',
-};
-
-export const isStaff = requireRole(ROLE.ADMIN, ROLE.LIBRARIAN);
 export const isAdmin = requireRole(ROLE.ADMIN);
+export const isMember = requireRole(ROLE.MEMBER);
