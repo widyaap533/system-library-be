@@ -49,6 +49,45 @@ const cookieOptions = {
 // keduanya dibuat lewat POST /user oleh admin yang sudah login.
 const DEFAULT_ROLE_CODE = 'ANGGOTA';
 
+// Field yang boleh dikirim pengguna saat mendaftar.
+// Field lain dari body (role_id, member_id, is_active, id, dll.) diabaikan.
+const REGISTER_FIELDS = [
+  'nik',
+  'name',
+  'email',
+  'password',
+  'place_of_birth',
+  'date_of_birth',
+  'address',
+  'phone_number',
+  'institution',
+  'occupation_id',
+  'marriage_id',
+  'education_id',
+  'religion_id',
+  'gender_id'
+];
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const NIK_REGEX = /^\d{16}$/;
+
+// Kesalahan konfigurasi/data server saat membuat nomor anggota,
+// bukan kesalahan input pengguna.
+const SERVER_SIDE_MEMBER_ERRORS = [
+  'GENDER_CODE_NOT_SET',
+  'GENDER_CODE_INVALID',
+  'SEQUENCE_EXHAUSTED'
+];
+
+const isEmpty = (value) =>
+  value === undefined ||
+  value === null ||
+  (typeof value === 'string' && value.trim() === '');
+
+// Email selalu dibandingkan dalam huruf kecil tanpa spasi,
+// supaya "Budi@x.com" dan "budi@x.com" dianggap akun yang sama
+const normalizeEmail = (email) => String(email).trim().toLowerCase();
+
 const signAccessToken = (user) =>
   jwt.sign({ sub: user.id }, process.env.JWT_ACCESS_SECRET, {
     expiresIn: ACCESS_EXPIRES,
@@ -61,26 +100,19 @@ const signRefreshToken = (user) =>
 
 export const register = async (req, res) => {
   try {
-    const data = req.body;
+    const body = req.body ?? {};
 
-    const required = [
-      'nik',
-      'name',
-      'email',
-      'password',
-      'place_of_birth',
-      'date_of_birth',
-      'address',
-      'phone_number',
-      'institution',
-      'occupation_id',
-      'marriage_id',
-      'education_id',
-      'religion_id',
-      'gender_id'
-    ];
+    // Ambil hanya field yang diizinkan, rapikan spasi pada string
+    // (password tidak di-trim karena spasi bisa jadi bagian password)
+    const data = {};
+    for (const field of REGISTER_FIELDS) {
+      const value = body[field];
+      data[field] = typeof value === 'string' && field !== 'password'
+        ? value.trim()
+        : value;
+    }
 
-    const missing = required.filter((field) => !data[field]);
+    const missing = REGISTER_FIELDS.filter((field) => isEmpty(data[field]));
     if (missing.length > 0) {
       return res.status(400).json({
         message: 'Beberapa field wajib belum diisi',
@@ -88,12 +120,24 @@ export const register = async (req, res) => {
       });
     }
 
-    if (data.password.length < 8) {
+    // NIK disimpan sebagai string: 16 digit melebihi batas aman angka JavaScript,
+    // dan angka 0 di depan bisa hilang kalau diperlakukan sebagai number.
+    data.nik = String(data.nik);
+    if (!NIK_REGEX.test(data.nik)) {
+      return res.status(400).json({ message: 'NIK harus 16 digit angka' });
+    }
+
+    data.email = normalizeEmail(data.email);
+    if (!EMAIL_REGEX.test(data.email)) {
+      return res.status(400).json({ message: 'Format email tidak valid' });
+    }
+
+    if (typeof data.password !== 'string' || data.password.length < 8) {
       return res.status(400).json({ message: 'Password minimal 8 karakter' });
     }
 
-    if (data.nik.length !== 16) {
-      return res.status(400).json({ message: 'NIK harus 16 digit' });
+    if (Number.isNaN(Date.parse(data.date_of_birth))) {
+      return res.status(400).json({ message: 'Tanggal lahir tidak valid (format: YYYY-MM-DD)' });
     }
 
     const duplicateEmail = await getUserByEmail(data.email);
@@ -108,36 +152,38 @@ export const register = async (req, res) => {
 
     const role = await getRoleByCode(DEFAULT_ROLE_CODE);
     if (!role) {
-      return res.status(500).json({
-        message: `Peran dengan kode "${DEFAULT_ROLE_CODE}" belum diatur. Jalankan seed terlebih dahulu.`
-      });
+      console.error(`Register error: peran "${DEFAULT_ROLE_CODE}" belum ada. Jalankan seed terlebih dahulu.`);
+      return res.status(500).json({ message: 'Terjadi kesalahan server' });
     }
 
-    // role_id dan member_id ditentukan server, bukan diambil dari body —
-    // kalau tidak, siapa pun bisa mendaftar langsung sebagai admin
-    // dan memilih nomor anggotanya sendiri.
+    // role_id dan member_id selalu ditentukan server, tidak pernah dari body,
+    // supaya tidak ada yang bisa mendaftar sebagai admin atau memilih nomor anggota sendiri.
     // Nomor anggota mengikuti format perpustakaan: L/P + tahun + urutan.
     const payload = {
       ...data,
       role_id: role.id,
-      member_id: await generateMemberId(data.gender_id),
+      member_id: await generateMemberId(data.gender_id)
     };
 
     const newUser = await createUser(payload, 'system');
 
-    res.status(201).json({
+    // Jangan pernah mengirim hash password ke client
+    const { password, ...safeUser } = newUser;
+
+    return res.status(201).json({
       message: 'Pendaftaran berhasil. Silakan login.',
-      data: newUser
+      data: safeUser
     });
   } catch (error) {
-    if (
-      error.code === 'GENDER_NOT_FOUND' ||
-      error.code === 'GENDER_CODE_NOT_SET' ||
-      error.code === 'GENDER_CODE_INVALID' ||
-      error.code === 'SEQUENCE_EXHAUSTED' ||
-      error.code === 'MEMBER_ID_COLLISION'
-    ) {
-      return res.status(400).json({ message: error.message });
+    if (error.code === 'GENDER_NOT_FOUND') {
+      return res.status(400).json({ message: 'Jenis kelamin tidak valid' });
+    }
+    if (error.code === 'MEMBER_ID_COLLISION') {
+      return res.status(409).json({ message: 'Gagal membuat nomor anggota, silakan coba lagi' });
+    }
+    if (SERVER_SIDE_MEMBER_ERRORS.includes(error.code)) {
+      console.error('Register error (konfigurasi nomor anggota):', error);
+      return res.status(500).json({ message: 'Terjadi kesalahan server' });
     }
     if (error.code === 'P2002') {
       return res.status(409).json({ message: 'Email, NIK, atau nomor anggota sudah digunakan' });
@@ -146,19 +192,20 @@ export const register = async (req, res) => {
       return res.status(400).json({ message: 'Ada data relasi yang tidak valid' });
     }
     console.error('Register error:', error);
-    res.status(500).json({ message: 'Terjadi kesalahan server' });
+    return res.status(500).json({ message: 'Terjadi kesalahan server' });
   }
 };
 
 export const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body ?? {};
 
-    if (!email || !password) {
+    if (isEmpty(email) || isEmpty(password)) {
       return res.status(400).json({ message: 'Email dan password wajib diisi' });
     }
 
-    const user = await getUserByEmailWithPassword(email);
+    // Disamakan dengan register: email disimpan dalam huruf kecil
+    const user = await getUserByEmailWithPassword(normalizeEmail(email));
 
     // Pesan sengaja dibuat sama untuk email salah dan password salah,
     // supaya tidak bisa dipakai menebak email mana yang terdaftar
